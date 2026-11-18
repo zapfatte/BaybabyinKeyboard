@@ -13,33 +13,75 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Extract project ZIP
         run: |
+          mkdir extracted
           unzip -o BaybayinKeyboard-project.zip -d extracted
 
-      - name: Locate Gradle project
+      - name: Locate Android Gradle project
         run: |
-          find extracted -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \)
+          echo "Extracted files:"
+          find extracted -maxdepth 4 -type f | head -100
+
+          SETTINGS_FILE=$(find extracted -type f \
+            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            -not -path "*/.gradle/*" | head -1)
+
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "ERROR: Gradle settings file not found!"
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+          echo "Android project found at: $PROJECT_DIR"
 
       - name: Build APK
         run: |
-          cd extracted
-          PROJECT_DIR=$(find . -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) -printf '%h\n' | head -n 1)
           cd "$PROJECT_DIR"
-          if [ -f gradlew ]; then
-            chmod +x gradlew
-            ./gradlew assembleDebug
-          else
-            gradle assembleDebug
+
+          if [ ! -f gradlew ]; then
+            echo "ERROR: Gradle wrapper not found!"
+            exit 1
           fi
+
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Verify APK
+        run: |
+          APK=$(find "$PROJECT_DIR" -type f \
+            -path "*/build/outputs/apk/debug/*.apk" | head -1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not generated!"
+            exit 1
+          fi
+
+          echo "APK found: $APK"
+          ls -lh "$APK"
+
+          SIZE=$(stat -c%s "$APK")
+
+          if [ "$SIZE" -lt 50000 ]; then
+            echo "ERROR: APK is suspiciously small ($SIZE bytes)"
+            exit 1
+          fi
+
+          unzip -t "$APK"
+          echo "APK verification passed!"
+
+          mkdir -p release
+          cp "$APK" release/BaybayinKeyboard.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: BaybayinKeyboard-APK
-          path: extracted/**/build/outputs/apk/debug/*.apk
+          path: release/BaybayinKeyboard.apk
+          if-no-files-found: error
